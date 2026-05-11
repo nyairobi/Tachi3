@@ -46,6 +46,10 @@ export function FormatInt(v: number): string {
 }
 
 export function FormatDifficulty(chart: ChartDocument): string {
+	const gameGroup = GameToGameGroup(chart.game);
+	if (gameGroup === "ongeki" || gameGroup === "chunithm" || gameGroup === "maimaidx") {
+		return `${chart.difficulty} ${chart.level}`.trim();
+	}
 	return FormatDifficultyShort(chart);
 }
 
@@ -76,7 +80,10 @@ export function FormatDifficultyShort(chart: ChartDocument): string {
 	}
 
 	// use the difficulty format there
-	if (gameConfig.difficulties.type === "FIXED") {
+	if (
+		gameConfig.difficulties.type === "FIXED" ||
+		gameConfig.difficulties.type === "CHUGEKIMAI_STYLE"
+	) {
 		const diff = gameConfig.difficulties.format[chart.difficulty] ?? chart.difficulty;
 
 		return `${diff} ${chart.level}`.trim();
