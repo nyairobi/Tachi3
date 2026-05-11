@@ -182,7 +182,7 @@ export const GAME_ONGEKI_CONF = {
 	defaultProfileRatingAlg: "naiveRating",
 
 	difficulties: {
-		type: "CHUGEKIMAI_STYLE",
+		type: "FIXED",
 		order: ["BASIC", "ADVANCED", "EXPERT", "MASTER", "LUNATIC"],
 		format: {
 			BASIC: "BAS",
@@ -236,5 +236,5 @@ export const GAME_ONGEKI_CONF = {
 
 	scoreMeta: z.strictObject({}),
 
-	supportedMatchTypes: ["gcmInGameIDSpecialChart", "songTitle", "tachiSongID", "inGameID"],
+	supportedMatchTypes: ["songTitle", "tachiSongID", "inGameID"],
 } as const satisfies INTERNAL_GAME_CONFIG;
