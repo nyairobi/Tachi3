@@ -94,17 +94,17 @@ export const ONGEKI_IMPL: GameImplementation<"ongeki"> = {
 		starRating: SessionAvgBest10For("starRating")(arr),
 	}),
 	profileCalcs: async (game, userID) => {
-		const [naiveRating, score, star] = await Promise.all([
+		const [naiveRating, scoreRating, starRating] = await Promise.all([
 			ProfileAvgBestN("rating", 45, false, 100)(game, userID),
 			ProfileAvgBestN("scoreRating", 60, false, 1000)(game, userID),
 			ProfileAvgBestN("starRating", 50, false, 1000)(game, userID),
 		]);
 
-		const score1k = Math.round((score ?? 0) * 1000);
-		const star1k = Math.round((star ?? 0) * 1000);
+		const score1k = Math.round((scoreRating ?? 0) * 1000);
+		const star1k = Math.round((starRating ?? 0) * 1000);
 		const naiveRatingRefresh = (Math.floor(score1k * 1.2) + star1k) / 1000.0;
 
-		return { naiveRating, naiveRatingRefresh };
+		return { naiveRating, naiveRatingRefresh, scoreRating, starRating };
 	},
 	classDerivers: (ratings) => {
 		const rating = ratings.naiveRatingRefresh;

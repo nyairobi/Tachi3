@@ -124,6 +124,31 @@ const CHART_CHECKS: { [G in GameGroup]?: Array<Test<ChartDocument<GamesForGroup[
 			(c) => c.levelNum.toString(),
 		),
 	],
+	ongeki: [
+		test("Level and LevelNum should align (X+ should be X.7 or higher)", (c) => {
+			if (c.level.endsWith("+")) {
+				return (c.levelNum * 10) % 10 >= 7;
+			} else {
+				return (c.levelNum * 10) % 10 < 7;
+			}
+		}),
+		test("Charts 12+ and above should have chart view links", (c) => {
+			if (c.levelNum === 0.0 || c.levelNum >= 12.7) {
+				if (c.data.chartViewURL === undefined) {
+					console.log(chalk.yellow(`Missing chartViewURL: ${c.chartID}`));
+				}
+			}
+			return true;
+		}),
+		test("Bonus tracks must be in the ID range 7000~7999", (c) => {
+			if (c.data.isBonusTrack) {
+				return (
+					c.data.inGameID === null || (c.data.inGameID >= 7000 && c.data.inGameID < 8000)
+				);
+			}
+			return true;
+		}),
+	],
 };
 
 const SONG_CHECKS: { [G in GameGroup]?: Array<Test<SongDocument<G>>> } = {};

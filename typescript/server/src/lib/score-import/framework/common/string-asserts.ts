@@ -18,6 +18,12 @@ export function AssertStrAsDifficulty(strVal: string, game: V3Game): Difficultie
 		);
 	}
 
+	if (game === "ongeki" && strVal === "Re:MASTER") {
+		throw new InvalidScoreFailure(
+			`Invalid Difficulty for ${FormatGame(game)} - Don't use Re:MASTER directly; send the score as LUNATIC instead.`,
+		);
+	}
+
 	return strVal;
 }
 

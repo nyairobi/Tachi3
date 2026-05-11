@@ -14,7 +14,7 @@ import {
 	OngekiComboStatus,
 	OngekiLevel,
 } from "#proto/generated/ongeki/common_pb";
-import { FindChartOnInGameID } from "#utils/queries/charts";
+import { FindOngekiChartOnInGameID } from "#utils/queries/charts";
 import { FindSongOnID } from "#utils/queries/songs";
 
 import type { MytOngekiScore } from "./types";
@@ -92,7 +92,7 @@ const ConvertAPIMytOngeki: ConverterFunction<MytOngekiScore, EmptyObject> = asyn
 		);
 	}
 
-	const chart = await FindChartOnInGameID("ongeki", data.info.musicId, difficulty);
+	const chart = await FindOngekiChartOnInGameID("ongeki", data.info.musicId, difficulty);
 
 	if (chart === null) {
 		throw new SongOrChartNotFoundFailure(

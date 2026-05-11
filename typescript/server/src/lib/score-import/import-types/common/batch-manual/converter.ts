@@ -19,6 +19,8 @@ import {
 	FindChartWithSongDifficulty,
 	FindChartWithSongDifficultyVersion,
 	FindITGChartOnHash,
+	FindOngekiChartOnInGameID,
+	FindOngekiChartWithSongDifficulty,
 	FindPopnChartOnHashSHA256,
 	FindSDVXChartOnInGameID,
 	FindSDVXChartOnInGameIDVersion,
@@ -353,7 +355,11 @@ export async function ResolveSongAndChart(
 					resolver.version,
 				);
 			} else {
-				chart = await FindChartOnInGameIDPrimary(game, identifier, difficulty);
+				if (game === "ongeki") {
+					chart = await FindOngekiChartOnInGameID(game, identifier, difficulty);
+				} else {
+					chart = await FindChartOnInGameIDPrimary(game, identifier, difficulty);
+				}
 			}
 
 			if (!chart) {
@@ -426,10 +432,10 @@ export async function ResolveSongAndChart(
 		}
 
 		case "gcmInGameIDSpecialChart": {
-			const gcmGames = ["chunithm", "ongeki", "maimai", "maimaidx"] as const;
+			const gcmGames = ["chunithm", "maimai", "maimaidx"] as const;
 			if (!gcmGames.includes(game as (typeof gcmGames)[number])) {
 				throw new InvalidScoreFailure(
-					`gcmInGameIDSpecialChart matchType can only be used on CHUNITHM, O.N.G.E.K.I., maimai, or maimai DX.`,
+					`gcmInGameIDSpecialChart matchType can only be used on CHUNITHM, maimai, or maimai DX.`,
 				);
 			}
 
@@ -518,7 +524,7 @@ export async function ResolveChartFromSong(
 		case "CHUGEKIMAI_STYLE":
 			if (!gameConfig.difficulties.order.includes(difficulty)) {
 				throw new InvalidScoreFailure(
-					`This difficulty "${difficulty}" is not supported for songTitle+difficulty lookups. If you are trying to import for WORLD'S END/LUNATIC/UTAGE scores, you must use inGameID, or a different lookup method.`,
+					`This difficulty "${difficulty}" is not supported for songTitle+difficulty lookups. If you are trying to import for WORLD'S END/UTAGE scores, you must use inGameID, or a different lookup method.`,
 				);
 			}
 			break;
@@ -536,7 +542,11 @@ export async function ResolveChartFromSong(
 			resolver.version,
 		);
 	} else {
-		chart = await FindChartWithSongDifficulty(game, song.id, difficulty);
+		if (game === "ongeki") {
+			chart = await FindOngekiChartWithSongDifficulty(game, song.id, difficulty);
+		} else {
+			chart = await FindChartWithSongDifficulty(game, song.id, difficulty);
+		}
 	}
 
 	if (!chart) {

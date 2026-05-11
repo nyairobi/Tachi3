@@ -823,6 +823,7 @@ export const GPT_CLIENT_IMPLEMENTATIONS: GPTClientImplementations = {
 			EXPERT: COLOUR_SET.vibrantPink,
 			MASTER: COLOUR_SET.purple,
 			LUNATIC: COLOUR_SET.white,
+			"Re:MASTER": COLOUR_SET.white,
 		},
 		ratingSystems: [],
 		ratingAlgNameOverrides: {

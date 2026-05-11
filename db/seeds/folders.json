@@ -36899,7 +36899,7 @@
 		"slug": "brightmemory3omni-lunatic",
 		"title": "LUNATIC (bright MEMORY Act.3 Omnimix)",
 		"versionFilter": ["brightMemory3Omni"],
-		"where": "chart.data->>'isReMaster' = 'false' AND chart.difficulty = 'LUNATIC'"
+		"where": "chart.difficulty = 'LUNATIC'"
 	},
 	{
 		"game": "ongeki",
@@ -36910,7 +36910,7 @@
 		"slug": "brightmemory3-lunatic",
 		"title": "LUNATIC (bright MEMORY Act.3)",
 		"versionFilter": ["brightMemory3"],
-		"where": "chart.data->>'isReMaster' = 'false' AND chart.difficulty = 'LUNATIC'"
+		"where": "chart.difficulty = 'LUNATIC'"
 	},
 	{
 		"game": "ongeki",
@@ -36921,7 +36921,7 @@
 		"slug": "refreshomni-lunatic",
 		"title": "LUNATIC (Re:Fresh Omnimix)",
 		"versionFilter": ["refreshOmni"],
-		"where": "chart.data->>'isReMaster' = 'false' AND chart.difficulty = 'LUNATIC'"
+		"where": "chart.difficulty = 'LUNATIC'"
 	},
 	{
 		"game": "ongeki",
@@ -36932,7 +36932,7 @@
 		"slug": "refresh-lunatic",
 		"title": "LUNATIC (Re:Fresh)",
 		"versionFilter": ["refresh"],
-		"where": "chart.data->>'isReMaster' = 'false' AND chart.difficulty = 'LUNATIC'"
+		"where": "chart.difficulty = 'LUNATIC'"
 	},
 	{
 		"game": "ongeki",
@@ -37008,7 +37008,7 @@
 		"slug": "brightmemory3omni-lunatic-remaster",
 		"title": "Re:MASTER (bright MEMORY Act.3 Omnimix)",
 		"versionFilter": ["brightMemory3Omni"],
-		"where": "chart.data->>'isReMaster' = 'true' AND chart.difficulty = 'LUNATIC'"
+		"where": "chart.difficulty = 'Re:MASTER'"
 	},
 	{
 		"game": "ongeki",
@@ -37019,7 +37019,7 @@
 		"slug": "brightmemory3-lunatic-remaster",
 		"title": "Re:MASTER (bright MEMORY Act.3)",
 		"versionFilter": ["brightMemory3"],
-		"where": "chart.data->>'isReMaster' = 'true' AND chart.difficulty = 'LUNATIC'"
+		"where": "chart.difficulty = 'Re:MASTER'"
 	},
 	{
 		"game": "ongeki",
@@ -37030,7 +37030,7 @@
 		"slug": "refreshomni-lunatic-remaster",
 		"title": "Re:MASTER (Re:Fresh Omnimix)",
 		"versionFilter": ["refreshOmni"],
-		"where": "chart.data->>'isReMaster' = 'true' AND chart.difficulty = 'LUNATIC'"
+		"where": "chart.difficulty = 'Re:MASTER'"
 	},
 	{
 		"game": "ongeki",
@@ -37041,7 +37041,7 @@
 		"slug": "refresh-lunatic-remaster",
 		"title": "Re:MASTER (Re:Fresh)",
 		"versionFilter": ["refresh"],
-		"where": "chart.data->>'isReMaster' = 'true' AND chart.difficulty = 'LUNATIC'"
+		"where": "chart.difficulty = 'Re:MASTER'"
 	},
 	{
 		"game": "pms-controller",
