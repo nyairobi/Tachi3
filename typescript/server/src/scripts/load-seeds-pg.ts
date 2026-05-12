@@ -13,6 +13,10 @@
  *
  * Run with:
  *   just db-load-seeds
+ *
+ * In `NODE_ENV=dev` only, if no admin account exists yet, creates the same
+ * default admin as server boot (`admin` / `password` / admin@example.com), or
+ * promotes user #1 to admin so seed import can run.
  */
 
 import { buildChartIdMap, importSeeds, ImportSeedsSubsetForTests } from "../services/pg/seeds";
@@ -36,6 +40,51 @@ if (require.main === module) {
 	}
 
 	// Import inline to avoid loading the full server at module-eval time.
+	const { AddNewUser } = await import("#lib/auth/auth");
+	const { Env } = await import("#lib/setup/config");
+	const { log } = await import("#lib/log/log");
+	const DB = (await import("#services/pg/db")).default;
+	const { GetUserWithID } = await import("#utils/user");
+
+	if (Env.NODE_ENV === "dev") {
+		const anyAdmin = await DB.selectFrom("account")
+			.select("id")
+			.where("auth_level", "=", "admin")
+			.executeTakeFirst();
+
+		if (!anyAdmin) {
+			const user1 = await GetUserWithID(1);
+
+			if (!user1) {
+				log.info(
+					"No admin account exists; creating default local dev admin for seed import.",
+				);
+
+				await DB.transaction().execute(async (txn) => {
+					const { newUser } = await AddNewUser(txn, "admin", "password", "admin@example.com");
+					await txn
+						.updateTable("account")
+						.set({ auth_level: "admin" })
+						.where("id", "=", newUser.id)
+						.execute();
+				});
+
+				log.info(
+					"Created admin user (username: admin, password: password, email: admin@example.com).",
+				);
+			} else {
+				log.info(
+					"No admin account exists; promoting user #1 to admin for seed import (local dev).",
+				);
+
+				await DB.updateTable("account")
+					.set({ auth_level: "admin" })
+					.where("id", "=", 1)
+					.execute();
+			}
+		}
+	}
+
 	const { ACTION_ImportSeeds } = await import("../actions/import-seeds");
 	const { DefaultAdminUser } = await import("../lib/jobs/default-admin-user");
 

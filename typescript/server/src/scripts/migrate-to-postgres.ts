@@ -12,7 +12,6 @@
  *   cd server && MONGO_URL=... POSTGRES_URL=... ts-node -r tsconfig-paths/register src/scripts/migrate-to-postgres.ts
  */
 
-import type { PrivateUserInfoDocument } from "#utils/types";
 import type {
 	AuthLevel,
 	Database,
@@ -65,58 +64,47 @@ import path from "path";
 import { Pool } from "pg";
 import {
 	ALL_GAMES,
-	type CGCardInfo,
-	type ClassAchievementDocument,
-	type FervidexSettingsDocument,
-	type GoalSubscriptionDocument,
-	type ImportDocument,
-	type ImportTimingsDocument,
-	type KaiAuthDocument,
-	type KsHookSettingsDocument,
-	type MytCardInfo,
-	type NotificationDocument,
-	type OrphanChartDocument,
-	type QuestSubscriptionDocument,
-	type ScoreDocument,
-	type SessionDocument,
-	type TachiAPIClientDocument,
-	type UGPTSettingsDocument,
+	GameToGameGroup,
+	type LEGACY_GPTString,
+	LEGACY_GPTStringToGame,
 	UserAuthLevels,
-	type UserDocument,
-	type UserGameStats,
-	type UserGameStatsSnapshotDocument,
-	type UserNameChangeDocument,
-	type UserSettingsDocument,
+	type V3Game,
 } from "tachi-common";
 
+import type {
+	MongoApiClientsCollectionDocument,
+	MongoApiTokensCollectionDocument,
+	MongoCgCardInfoCollectionDocument,
+	MongoClassAchievementsCollectionDocument,
+	MongoFerSettingsCollectionDocument,
+	MongoGameSettingsCollectionDocument,
+	MongoGameStatsCollectionDocument,
+	MongoGameStatsSnapshotsCollectionDocument,
+	MongoGoalSubsCollectionDocument,
+	MongoImportLocksCollectionDocument,
+	MongoImportsCollectionDocument,
+	MongoImportTimingsCollectionDocument,
+	MongoInviteLocksCollectionDocument,
+	MongoInvitesCollectionDocument,
+	MongoKaiAuthTokensCollectionDocument,
+	MongoKshookSv6cSettingsCollectionDocument,
+	MongoMytCardInfoCollectionDocument,
+	MongoNotificationsCollectionDocument,
+	MongoOrphanChartQueueCollectionDocument,
+	MongoOrphanScoresCollectionDocument,
+	MongoQuestSubsCollectionDocument,
+	MongoRecentFolderViewsCollectionDocument,
+	MongoScoreBlacklistCollectionDocument,
+	MongoScoresCollectionDocument,
+	MongoSessionsCollectionDocument,
+	MongoSessionsScoreLookupProjection,
+	MongoUserNameChangesCollectionDocument,
+	MongoUserPrivateInformationCollectionDocument,
+	MongoUsersCollectionDocument,
+	MongoUserSettingsCollectionDocument,
+} from "./migrate-to-postgres.mongo-docs";
+
 import { buildChartIdMap, importSeeds } from "./load-seeds-pg";
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Extension types for MongoDB documents that have extra fields not in the TS interface
-// ──────────────────────────────────────────────────────────────────────────────
-
-/** InviteCodeDocument extended – always has all fields in practice. */
-interface InviteCodeDocumentFull {
-	code: string;
-	createdBy: number;
-	createdAt: number;
-	consumed: boolean;
-	consumedBy: number | null;
-	consumedAt: number | null;
-}
-
-/** Import lock document – inlined in db.ts. */
-interface ImportLockDocument {
-	userID: number;
-	locked: boolean;
-	lockedAt: number | null;
-}
-
-/** Invite lock document – inlined in db.ts. */
-interface InviteLockDocument {
-	userID: number;
-	locked: boolean;
-}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Connection setup
@@ -180,6 +168,48 @@ function mongoGameToPg(game: string, playtype?: string): PgGame {
 		throw new Error(`[migrate] Missing playtype for legacy game group: ${game}`);
 	}
 	return toGame(game, playtype);
+}
+
+function mongoImportsCollectionPgGames(imp: MongoImportsCollectionDocument): PgGame[] {
+	const gg = imp.game ?? imp.gameGroup;
+
+	if (imp.games !== undefined && imp.games.length > 0) {
+		return imp.games.map((g) => mongoGameToPg(g));
+	}
+
+	const ptsFromMongo =
+		imp.playtypes ??
+		(imp.playtype !== undefined && imp.playtype !== "" ? [imp.playtype] : undefined);
+
+	if (ptsFromMongo !== undefined && ptsFromMongo.length > 0 && gg !== undefined) {
+		return ptsFromMongo.map((pt) => toGame(gg, pt));
+	}
+
+	if (imp.gptStrings !== undefined && imp.gptStrings.length > 0) {
+		return imp.gptStrings.map((gpt) =>
+			mongoGameToPg(LEGACY_GPTStringToGame(gpt as LEGACY_GPTString)),
+		);
+	}
+
+	return [];
+}
+
+/** Resolves `import.game_group` from legacy aliases or inferred V3 games. */
+function mongoImportsCollectionGameGroup(
+	imp: MongoImportsCollectionDocument,
+	pgGames: PgGame[],
+): GameGroup {
+	const gg = imp.gameGroup ?? imp.game;
+	if (gg !== undefined) {
+		return gg;
+	}
+	const first = pgGames[0];
+	if (first !== undefined) {
+		return GameToGameGroup(first as V3Game);
+	}
+	throw new Error(
+		`[migrate] import ${imp.importID}: missing game_group (no game/gameGroup and empty derived games list).`,
+	);
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -379,7 +409,7 @@ async function main(): Promise<void> {
 	// ── account + account_badge ───────────────────────────────────────────────
 	{
 		console.log("\n[account / account_badge]");
-		const users = await mongoDB.get<UserDocument>("users").find({});
+		const users = await mongoDB.get<MongoUsersCollectionDocument>("users").find({});
 
 		const accountRows: Array<NewAccount> = users.map((u) => ({
 			id: u.id,
@@ -415,47 +445,84 @@ async function main(): Promise<void> {
 	// ── orphan_chart + orphan_chart_user ──────────────────────────────────────
 	{
 		console.log("\n[orphan_chart / orphan_chart_user]");
-		const orphans = await mongoDB.get<OrphanChartDocument>("orphan-chart-queue").find({});
+		const migratedAccountIds = new Set(
+			(await pg.selectFrom("account").select("id").execute()).map((r) => r.id),
+		);
+
+		const orphans = await mongoDB.get<MongoOrphanChartQueueCollectionDocument>(
+			"orphan-chart-queue",
+		).find({});
 
 		const orphanRows: Array<NewOrphanChart> = [];
 		const orphanUserRows: Array<NewOrphanChartUser> = [];
+		let skippedOrphanUserLinks = 0;
 
 		for (const o of orphans) {
 			const chartId = o.chartDoc.chartID;
 
+			const chartDocGame =
+				typeof o.chartDoc.game === "string" && o.chartDoc.game !== ""
+					? o.chartDoc.game
+					: undefined;
+
+			const gptLike =
+				o.gptString !== undefined && o.gptString !== ""
+					? o.gptString
+					: o.idString !== undefined && o.idString !== ""
+						? o.idString
+						: undefined;
+
+			const gameSlug =
+				(o.game !== undefined && o.game !== "" ? o.game : undefined) ??
+				(gptLike !== undefined ? LEGACY_GPTStringToGame(gptLike as LEGACY_GPTString) : undefined) ??
+				chartDocGame;
+
+			if (gameSlug === undefined) {
+				console.error(
+					`[migrate] [orphan_chart] Cannot derive Postgres game for chartID=${chartId}. Raw Mongo orphan-chart-queue document:`,
+				);
+				console.error(JSON.stringify(o, null, "\t"));
+
+				throw new Error(
+					`[migrate] [orphan_chart] ${chartId}: no game (checked root game, gptString, idString, chartDoc.game). Printed document JSON above.`,
+				);
+			}
+
 			orphanRows.push({
 				id: chartId,
-				game: mongoGameToPg(o.game),
+				game: mongoGameToPg(gameSlug),
 				chart_doc: JSON.stringify(o.chartDoc),
 				song_doc: JSON.stringify(o.songDoc),
 			});
 
-			for (const userId of o.userIDs) {
+			for (const userId of o.userIDs ?? []) {
+				if (!migratedAccountIds.has(userId)) {
+					skippedOrphanUserLinks++;
+					continue;
+				}
+
 				orphanUserRows.push({ orphan_chart_id: chartId, user_id: userId });
 			}
 		}
 
 		await batchInsert("orphan_chart", orphanRows);
 		await batchInsert("orphan_chart_user", orphanUserRows);
+
+		if (skippedOrphanUserLinks > 0) {
+			console.warn(
+				`  [orphan_chart_user] Skipped ${skippedOrphanUserLinks.toLocaleString()} user link(s) — user_id not present in migrated account (Mongo referenced deleted/absent users).`,
+			);
+		}
+
 		console.log(`  ${orphanRows.length} orphan charts, ${orphanUserRows.length} user links.`);
 	}
 
 	// ── orphan_score (Mongo orphan-scores) ─────────────────────────────────────
 	{
 		console.log("\n[orphan_score]");
-		interface MongoOrphanScoreDocument {
-			orphanID: string;
-			importType: string;
-			game: GameGroup;
-			userID: number;
-			timeInserted: number;
-			errMsg?: string | null;
-			data: unknown;
-			context: unknown;
-		}
 
 		const mongoOrphans = await mongoDB
-			.get<{ _id?: unknown } & MongoOrphanScoreDocument>("orphan-scores")
+			.get<{ _id?: unknown } & MongoOrphanScoresCollectionDocument>("orphan-scores")
 			.find({});
 
 		const orphanScoreRows: Array<NewOrphanScore> = [];
@@ -497,7 +564,9 @@ async function main(): Promise<void> {
 	// ── account_settings + account_following ──────────────────────────────────
 	{
 		console.log("\n[account_settings / account_following]");
-		const settings = await mongoDB.get<UserSettingsDocument>("user-settings").find({});
+		const settings = await mongoDB.get<MongoUserSettingsCollectionDocument>(
+			"user-settings",
+		).find({});
 
 		const settingRows: Array<NewAccountSettings> = settings.map((s) => ({
 			user_id: s.userID,
@@ -525,7 +594,9 @@ async function main(): Promise<void> {
 	// ── account_username_change ───────────────────────────────────────────────
 	{
 		console.log("\n[account_username_change]");
-		const changes = await mongoDB.get<UserNameChangeDocument>("user-name-changes").find({});
+		const changes = await mongoDB.get<MongoUserNameChangesCollectionDocument>(
+			"user-name-changes",
+		).find({});
 
 		const changeRows: Array<NewAccountUsernameChange> = changes.map((c) => ({
 			user_id: c.userID,
@@ -542,7 +613,7 @@ async function main(): Promise<void> {
 	{
 		console.log("\n[priv_account_credential]");
 		const privInfo = await mongoDB
-			.get<PrivateUserInfoDocument>("user-private-information")
+			.get<MongoUserPrivateInformationCollectionDocument>("user-private-information")
 			.find({});
 
 		const credRows: Array<NewPrivAccountCredential> = privInfo.map((p) => ({
@@ -558,7 +629,9 @@ async function main(): Promise<void> {
 	// ── priv_api_client ───────────────────────────────────────────────────────
 	{
 		console.log("\n[priv_api_client]");
-		const clients = await mongoDB.get<TachiAPIClientDocument>("api-clients").find({});
+		const clients = await mongoDB.get<MongoApiClientsCollectionDocument>(
+			"api-clients",
+		).find({});
 
 		const clientRows: Array<NewPrivApiClient> = clients.map((c) => {
 			// Old MongoDB data uses dash-separated permission names ("customise-profile"),
@@ -591,7 +664,7 @@ async function main(): Promise<void> {
 	{
 		console.log("\n[priv_invite]");
 		// InviteCodeDocument is a discriminated union; use the full flattened type.
-		const invites = await mongoDB.get<InviteCodeDocumentFull>("invites").find({});
+		const invites = await mongoDB.get<MongoInvitesCollectionDocument>("invites").find({});
 
 		const inviteRows: Array<NewPrivInvite> = invites.map((inv) => ({
 			code: inv.code,
@@ -609,7 +682,9 @@ async function main(): Promise<void> {
 	// ── priv_svc_kai_auth_token ───────────────────────────────────────────────
 	{
 		console.log("\n[priv_svc_kai_auth_token]");
-		const kaiTokens = await mongoDB.get<KaiAuthDocument>("kai-auth-tokens").find({});
+		const kaiTokens = await mongoDB.get<MongoKaiAuthTokensCollectionDocument>(
+			"kai-auth-tokens",
+		).find({});
 
 		const tokenRows: Array<NewPrivSvcKaiAuthToken> = kaiTokens.map((k) => ({
 			user_id: k.userID,
@@ -625,7 +700,9 @@ async function main(): Promise<void> {
 	// ── priv_svc_cg_card_info ─────────────────────────────────────────────────
 	{
 		console.log("\n[priv_svc_cg_card_info]");
-		const cgCards = await mongoDB.get<CGCardInfo>("cg-card-info").find({});
+		const cgCards = await mongoDB.get<MongoCgCardInfoCollectionDocument>(
+			"cg-card-info",
+		).find({});
 
 		const cgRows: Array<NewPrivSvcCgCardInfo> = [];
 
@@ -650,7 +727,9 @@ async function main(): Promise<void> {
 	// ── priv_svc_myt_card_info ────────────────────────────────────────────────
 	{
 		console.log("\n[priv_svc_myt_card_info]");
-		const mytCards = await mongoDB.get<MytCardInfo>("myt-card-info").find({});
+		const mytCards = await mongoDB.get<MongoMytCardInfoCollectionDocument>(
+			"myt-card-info",
+		).find({});
 
 		const mytRows: Array<NewPrivSvcMytCardInfo> = [];
 
@@ -675,7 +754,9 @@ async function main(): Promise<void> {
 	// ── svc_fer_settings + priv_svc_fer_card ─────────────────────────────────
 	{
 		console.log("\n[svc_fer_settings / priv_svc_fer_card]");
-		const ferSettings = await mongoDB.get<FervidexSettingsDocument>("fer-settings").find({});
+		const ferSettings = await mongoDB.get<MongoFerSettingsCollectionDocument>(
+			"fer-settings",
+		).find({});
 
 		const ferRows: Array<NewSvcFerSettings> = ferSettings.map((f) => ({
 			user_id: f.userID,
@@ -700,7 +781,7 @@ async function main(): Promise<void> {
 	{
 		console.log("\n[svc_kshook_sv6c_settings]");
 		const ksSettings = await mongoDB
-			.get<KsHookSettingsDocument>("kshook-sv6c-settings")
+			.get<MongoKshookSv6cSettingsCollectionDocument>("kshook-sv6c-settings")
 			.find({});
 
 		const ksRows: Array<NewSvcKshookSv6cSettings> = ksSettings.map((k) => ({
@@ -715,7 +796,9 @@ async function main(): Promise<void> {
 	// ── import_lock ───────────────────────────────────────────────────────────
 	{
 		console.log("\n[import_lock]");
-		const importLocks = await mongoDB.get<ImportLockDocument>("import-locks").find({});
+		const importLocks = await mongoDB.get<MongoImportLocksCollectionDocument>(
+			"import-locks",
+		).find({});
 
 		const lockRows: Array<NewImportLock> = importLocks.map((l) => ({
 			user_id: l.userID,
@@ -730,7 +813,9 @@ async function main(): Promise<void> {
 	// ── invite_lock ───────────────────────────────────────────────────────────
 	{
 		console.log("\n[invite_lock]");
-		const inviteLocks = await mongoDB.get<InviteLockDocument>("invite-locks").find({});
+		const inviteLocks = await mongoDB.get<MongoInviteLocksCollectionDocument>(
+			"invite-locks",
+		).find({});
 
 		const lockRows: Array<NewInviteLock> = [];
 
@@ -754,7 +839,9 @@ async function main(): Promise<void> {
 	// ── notification ──────────────────────────────────────────────────────────
 	{
 		console.log("\n[notification]");
-		const notifications = await mongoDB.get<NotificationDocument>("notifications").find({});
+		const notifications = await mongoDB.get<MongoNotificationsCollectionDocument>(
+			"notifications",
+		).find({});
 
 		const notifRows: Array<NewNotification> = notifications.map((n) => ({
 			title: n.title,
@@ -775,8 +862,12 @@ async function main(): Promise<void> {
 	// `game-settings` (+ rivals) into those rows for mongo-to-pg.
 	{
 		console.log("\n[game_profile / game_rival]");
-		const ugptSettings = await mongoDB.get<UGPTSettingsDocument>("game-settings").find({});
-		const gameStats = await mongoDB.get<UserGameStats>("game-stats").find({});
+		const ugptSettings = await mongoDB.get<MongoGameSettingsCollectionDocument>(
+			"game-settings",
+		).find({});
+		const gameStats = await mongoDB.get<MongoGameStatsCollectionDocument>(
+			"game-stats",
+		).find({});
 
 		type ProfileKey = `${number}:${PgGame}`;
 		const profileByKey = new Map<ProfileKey, NewGameProfile>();
@@ -809,7 +900,7 @@ async function main(): Promise<void> {
 		});
 
 		for (const gs of gameStats) {
-			const game = mongoGameToPg(gs.game, (gs as { playtype?: string }).playtype);
+			const game = mongoGameToPg(gs.game, gs.playtype);
 			const key = `${gs.userID}:${game}` as ProfileKey;
 			profileByKey.set(key, {
 				user_id: gs.userID,
@@ -821,7 +912,7 @@ async function main(): Promise<void> {
 		}
 
 		for (const s of ugptSettings) {
-			const game = mongoGameToPg(s.game, (s as { playtype?: string }).playtype);
+			const game = mongoGameToPg(s.game, s.playtype);
 			const key = `${s.userID}:${game}` as ProfileKey;
 			const prefs = s.preferences;
 			const existing = profileByKey.get(key);
@@ -852,7 +943,7 @@ async function main(): Promise<void> {
 		const rivalRows: Array<NewGameRival> = [];
 
 		for (const s of ugptSettings) {
-			const game = mongoGameToPg(s.game, (s as { playtype?: string }).playtype);
+			const game = mongoGameToPg(s.game, s.playtype);
 			for (const rivalId of s.rivals) {
 				if (rivalId !== s.userID) {
 					rivalRows.push({ user_id: s.userID, game, rival: rivalId });
@@ -869,12 +960,12 @@ async function main(): Promise<void> {
 
 	// ── game_stats_snapshot ───────────────────────────────────────────────────
 	console.log("\n[game_stats_snapshot]");
-	await streamMigrate<UserGameStatsSnapshotDocument, NewGameStatsSnapshot>(
+	await streamMigrate<MongoGameStatsSnapshotsCollectionDocument, NewGameStatsSnapshot>(
 		"game-stats-snapshots",
 		"game_stats_snapshot",
 		(snap) => ({
 			user_id: snap.userID,
-			game: mongoGameToPg(snap.game, (snap as { playtype?: string }).playtype),
+			game: mongoGameToPg(snap.game, snap.playtype),
 			timestamp: tsReq(snap.timestamp),
 			playcount: snap.playcount,
 			ratings: JSON.stringify(snap.ratings),
@@ -886,17 +977,19 @@ async function main(): Promise<void> {
 	// ── class_achievement ─────────────────────────────────────────────────────
 	{
 		console.log("\n[class_achievement]");
-		const achievements = await mongoDB
-			.get<ClassAchievementDocument>("class-achievements")
-			.find({});
+		const achievements = await mongoDB.get<MongoClassAchievementsCollectionDocument>(
+			"class-achievements",
+		).find({});
 
 		const achievementRows: Array<NewClassAchievement> = achievements.map((a) => ({
-			game: mongoGameToPg(a.game, (a as { playtype?: string }).playtype),
+			game: mongoGameToPg(a.game, a.playtype),
 			user_id: a.userID,
 			class_set: a.classSet as string,
-			// classOldValue can be null in Mongo; Postgres requires a string - use empty string.
-			class_prev_value: a.classOldValue ?? "",
-			class_value: a.classValue,
+			class_prev_value:
+				a.classOldValue === null || a.classOldValue === undefined
+					? ""
+					: String(a.classOldValue),
+			class_value: String(a.classValue),
 			timestamp: tsReq(a.timeAchieved),
 		}));
 
@@ -906,7 +999,7 @@ async function main(): Promise<void> {
 
 	// ── session ───────────────────────────────────────────────────────────────
 	console.log("\n[session]");
-	await streamCollection<{ _id?: unknown } & SessionDocument>(
+	await streamCollection<MongoSessionsCollectionDocument>(
 		"sessions",
 		async (docs) => {
 			const rows: Array<NewSession> = [];
@@ -915,7 +1008,7 @@ async function main(): Promise<void> {
 				rows.push({
 					id: s.sessionID,
 					user_id: s.userID,
-					game: mongoGameToPg(s.game, (s as { playtype?: string }).playtype),
+					game: mongoGameToPg(s.game, s.playtype),
 					name: s.name,
 					description: s.desc,
 					time_inserted: tsReq(s.timeInserted),
@@ -944,7 +1037,7 @@ async function main(): Promise<void> {
 	);
 
 	console.log("\n[import / import_game / import_error / import_class / import_session]");
-	await streamCollection<ImportDocument>(
+	await streamCollection<MongoImportsCollectionDocument>(
 		"imports",
 		async (docs) => {
 			const importRows: Array<NewImport> = [];
@@ -956,13 +1049,15 @@ async function main(): Promise<void> {
 			// Batch-fetch the service field from the first score of each import
 			// rather than doing one findOne per import document.
 			const firstScoreIds = docs
-				.map((imp) => imp.scoreIDs[0])
+				.map((imp) => imp.scoreIDs?.[0])
 				.filter((id): id is string => id !== undefined);
 
 			const scoreServiceMap = new Map(
 				(
 					await mongoDB
-						.get<ScoreDocument>("scores")
+						.get<Pick<MongoScoresCollectionDocument, "scoreID" | "service">>(
+							"scores",
+						)
 						.find(
 							{ scoreID: { $in: firstScoreIds } },
 							{ projection: { scoreID: 1, service: 1 } },
@@ -973,31 +1068,26 @@ async function main(): Promise<void> {
 			for (const imp of docs) {
 				const importId = imp.importID;
 
-				const service = scoreServiceMap.get(imp.scoreIDs[0] ?? "") ?? "Unknown";
+				const service = scoreServiceMap.get(imp.scoreIDs?.[0] ?? "") ?? "Unknown";
+				const derivedGames = mongoImportsCollectionPgGames(imp);
+				const gameGroup = mongoImportsCollectionGameGroup(imp, derivedGames);
 
 				importRows.push({
 					id: importId,
 					user_id: imp.userID,
 					time_started: tsReq(imp.timeStarted),
 					time_finished: tsReq(imp.timeFinished),
-					game_group: imp.gameGroup as GameGroup,
-					import_type: imp.importType as ImportType,
-					user_intent: imp.userIntent,
+					game_group: gameGroup,
+					import_type: (imp.importType ?? "ir/direct-manual") as ImportType,
+					user_intent: imp.userIntent ?? false,
 					service,
 				});
 
-				const games =
-					imp.games.length > 0
-						? imp.games
-						: ((imp as { playtypes?: string[] }).playtypes ?? []).map((pt) =>
-								toGame(imp.gameGroup, pt),
-							);
-
-				for (const g of games) {
-					importGameRows.push({ id: importId, game: mongoGameToPg(g) });
+				for (const pgGame of derivedGames) {
+					importGameRows.push({ id: importId, game: pgGame });
 				}
 
-				for (const err of imp.errors) {
+				for (const err of imp.errors ?? []) {
 					importErrorRows.push({
 						import_id: importId,
 						type: err.type,
@@ -1005,17 +1095,20 @@ async function main(): Promise<void> {
 					});
 				}
 
-				for (const delta of imp.classDeltas) {
+				for (const delta of imp.classDeltas ?? []) {
 					importClassRows.push({
 						import_id: importId,
-						game: delta.game,
+						game: mongoGameToPg(delta.game, delta.playtype),
 						set: delta.set as string,
-						prev: delta.old,
-						new: delta.new,
+						prev:
+							delta.old === null || delta.old === undefined
+								? null
+								: String(delta.old),
+						new: String(delta.new),
 					});
 				}
 
-				for (const sess of imp.createdSessions) {
+				for (const sess of imp.createdSessions ?? []) {
 					importSessionRows.push({
 						import_id: importId,
 						session_id: sess.sessionID,
@@ -1069,7 +1162,9 @@ async function main(): Promise<void> {
 	// ── goal_sub ──────────────────────────────────────────────────────────────
 	{
 		console.log("\n[goal_sub]");
-		const goalSubs = await mongoDB.get<GoalSubscriptionDocument>("goal-subs").find({});
+		const goalSubs = await mongoDB.get<MongoGoalSubsCollectionDocument>(
+			"goal-subs",
+		).find({});
 
 		const uniqueGoalIds = [...new Set(goalSubs.map((gs) => gs.goalID))];
 		const existingGoalIds = new Set(
@@ -1118,7 +1213,9 @@ async function main(): Promise<void> {
 	// ── quest_sub ─────────────────────────────────────────────────────────────
 	{
 		console.log("\n[quest_sub]");
-		const questSubs = await mongoDB.get<QuestSubscriptionDocument>("quest-subs").find({});
+		const questSubs = await mongoDB.get<MongoQuestSubsCollectionDocument>(
+			"quest-subs",
+		).find({});
 
 		const questSubRows: Array<NewQuestSub> = questSubs.map((qs) => ({
 			quest_id: qs.questID,
@@ -1136,16 +1233,8 @@ async function main(): Promise<void> {
 
 	// ── folder_view ───────────────────────────────────────────────────────────
 	{
-		console.log("\n[folder_view]");
-		/** Legacy Mongo `recent-folder-views` stored internal folder ids as `folderID`. */
-		type LegacyRecentFolderViewDoc = {
-			folderID: string;
-			lastViewed: number;
-			userID: number;
-		};
-
 		const folderViews = await mongoDB
-			.get<LegacyRecentFolderViewDoc>("recent-folder-views")
+			.get<MongoRecentFolderViewsCollectionDocument>("recent-folder-views")
 			.find({});
 
 		const uniqueFolderIds = [...new Set(folderViews.map((fv) => fv.folderID))];
@@ -1194,7 +1283,7 @@ async function main(): Promise<void> {
 	{
 		console.log("\n[score_blacklist]");
 		const blacklist = await mongoDB
-			.get<{ scoreID: string; userID: number }>("score-blacklist")
+			.get<MongoScoreBlacklistCollectionDocument>("score-blacklist")
 			.find({});
 
 		const blacklistRows: Array<NewScoreBlacklist> = blacklist.map((b) => ({
@@ -1216,13 +1305,7 @@ async function main(): Promise<void> {
 	{
 		console.log("\n[priv_api_token]");
 		const apiTokens = await mongoDB
-			.get<{
-				fromAPIClient: string | null;
-				identifier: string;
-				permissions: Record<string, boolean>;
-				token: string | null;
-				userID: number | null;
-			}>("api-tokens")
+			.get<MongoApiTokensCollectionDocument>("api-tokens")
 			.find({});
 
 		const existingClientIds = new Set(
@@ -1280,7 +1363,7 @@ async function main(): Promise<void> {
 
 	// ── import_timing ─────────────────────────────────────────────────────────
 	console.log("\n[import_timing]");
-	await streamCollection<ImportTimingsDocument>(
+	await streamCollection<MongoImportTimingsCollectionDocument>(
 		"import-timings",
 		async (docs) => {
 			const importIds = docs.map((t) => t.importID);
@@ -1349,7 +1432,7 @@ async function main(): Promise<void> {
 	// ── score ─────────────────────────────────────────────────────────────────
 	console.log("\n[score]");
 
-	await streamCollection<ScoreDocument>(
+	await streamCollection<MongoScoresCollectionDocument>(
 		"scores",
 		async (docs) => {
 			const rows: Array<NewScore> = [];
@@ -1364,12 +1447,12 @@ async function main(): Promise<void> {
 			const scoreToImport = new Map<string, string>();
 
 			const [sessionDocs, importDocs] = await Promise.all([
-				mongoDB.get<{ scoreIDs: Array<string>; sessionID: string }>("sessions").find(
+				mongoDB.get<MongoSessionsScoreLookupProjection>("sessions").find(
 					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 					{ scoreIDs: { $in: batchScoreIds } } as any,
 					{ projection: { sessionID: 1, scoreIDs: 1 } },
 				),
-				mongoDB.get<{ importID: string; scoreIDs: Array<string> }>("imports").find(
+				mongoDB.get<MongoImportsCollectionDocument>("imports").find(
 					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 					{ scoreIDs: { $in: batchScoreIds } } as any,
 					{ projection: { importID: 1, scoreIDs: 1 } },
@@ -1385,7 +1468,7 @@ async function main(): Promise<void> {
 			}
 
 			for (const imp of importDocs) {
-				for (const sid of imp.scoreIDs) {
+				for (const sid of imp.scoreIDs ?? []) {
 					if (!scoreToImport.has(sid)) {
 						scoreToImport.set(sid, imp.importID);
 					}
@@ -1417,7 +1500,7 @@ async function main(): Promise<void> {
 					s.scoreData.optional = { enumIndexes: {} };
 				}
 
-				const v3Game = mongoGameToPg(s.game, (s as { playtype?: string }).playtype);
+				const v3Game = mongoGameToPg(s.game, s.playtype);
 				const { data, derived, judgements } = mongoScoreDataToPg(v3Game, s.scoreData);
 
 				rows.push({
