@@ -2,6 +2,7 @@ import type { Game } from "tachi-db";
 
 import { SELECT_CHART, ToChartDocument } from "#lib/db-formats/chart";
 import { SELECT_SONG_DOCUMENT, ToSongDocument } from "#lib/db-formats/song";
+import { InvalidScoreFailure } from "#lib/score-import/framework/common/converter-failures.js";
 import DB from "#services/pg/db";
 import { sql, type SqlBool } from "kysely";
 import {
@@ -16,7 +17,6 @@ import {
 	type V3Game,
 	type Versions,
 } from "tachi-common";
-import { InvalidScoreFailure } from "#lib/score-import/framework/common/converter-failures.js";
 
 export async function FindChartWithChartID(chartID: string) {
 	const row = await DB.selectFrom("chart")
